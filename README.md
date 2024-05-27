@@ -1,4 +1,4 @@
-# Gneralizing Influence to In-context Learning
+# Generalizing Influence to Demontration Attribution in In-context Learning
 
 ## Usage
 - For running the MNIST experiment, install the conda environment `jax_env.yml` and run `CUDA_VISIBLE_DEVICES=0 python mnist_data_attr.py`
