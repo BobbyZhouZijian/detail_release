@@ -1,186 +1,19 @@
-import itertools
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 import os
-import json
 
-from utils import DemosTemplate, EvalTemplate
-from datasets import load_dataset
-from src.infl_torch import calc_influence, get_ridge_weights
+from utils import (
+    load_model,
+    process_raw_data,
+    perturb_labels,
+    get_context,
+    compute_infl,
+
+)
 
 import argparse
 
 from gpt_query import model_from_config
 import yaml
-
-
-map_int_to_abcd = {
-    0: "A",
-    1: "B",
-    2: "C",
-    3: "D",
-}
-
-map_abcd_to_int = {
-    "A": 0,
-    "B": 1,
-    "C": 2,
-    "D": 3,
-}
-
-
-def load_model(model_path="lmsys/vicuna-7b-v1.3", tokenizer_path=None, device="cuda"):
-    if tokenizer_path is None:
-        tokenizer_path = model_path
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-    ).to(device).eval()
-    tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path,
-        use_fast=False
-    )
-    return model, tokenizer
-
-
-def process_raw_data(dataset_name, seed, total_num_data):
-    global map_abcd_to_int, map_int_to_abcd
-    if dataset_name == "ag_news":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-            2: "C",
-            3: "D",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-            "C": 2,
-            "D": 3,
-        }
-        raw_dataset = load_dataset(dataset_name)
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "rotten_tomatoes":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-        }
-        raw_dataset = load_dataset("rotten_tomatoes")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "sst2":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-        }
-        raw_dataset = load_dataset("SetFit/sst2")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "sst5":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-            2: "C",
-            3: "D",
-            4: "E",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-            "C": 2,
-            "D": 3,
-            "E": 4,
-        }
-        raw_dataset = load_dataset("SetFit/sst5")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "subj":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-        }
-        raw_dataset = load_dataset("SetFit/subj")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "sentence_similarity":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-            2: "C",
-            3: "D",
-            4: "E",
-            5: "F",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-            "C": 2,
-            "D": 3,
-            "E": 4,
-            "F": 5,
-        }
-        with open("./data/sentence_similarity.json") as f:
-            sentence_similarity = json.load(f)
-        samples = list(sentence_similarity['examples'].values())
-        # shuffle samples
-        np.random.seed(seed)
-        np.random.shuffle(samples)
-        outputs = list(map(lambda x: x['output'], samples))
-        labels = np.unique(outputs)
-        mapped_outputs = list(map(lambda x: map_int_to_abcd[labels.tolist().index(x)], outputs))
-        inputs = list(map(lambda x: x['input'], samples))
-        data_input = inputs[:total_num_data]
-        data_output = mapped_outputs[:total_num_data]
-    else:
-        raise NotImplementedError(f"Dataset {dataset_name} not implemented")
-    
-    return data_input, data_output
 
 
 def get_data(data_input, data_output, map_dict, seed=0, bs=200, num_data=10):
@@ -200,93 +33,6 @@ def get_data(data_input, data_output, map_dict, seed=0, bs=200, num_data=10):
         dataset.append((cur_demo_data, cur_eval_data))
     return dataset
 
-
-def get_context(demo_data, eval_data):
-    demos_template = "Input: [INPUT]\nOutput: [OUTPUT]"
-    eval_template = "[full_DEMO]\n\nInput: [INPUT]\nOutput:"
-
-    d_template = DemosTemplate(demos_template)
-    e_template = EvalTemplate(eval_template)
-    demos = d_template.fill(demo_data)
-    evals = e_template.fill(full_demo=demos, input=eval_data[0][0])
-
-    return evals
-
-
-def get_embedding(hidden_states, label_pos, layer_num, device="cuda"):
-    return hidden_states[layer_num][0][label_pos].to(device)
-
-
-def get_label_pos(tokenizer, input_ids, labels, model_name="vicuna-7b", position="column"):
-    output_id = tokenizer.convert_tokens_to_ids("Output")
-    all_label_pos = []
-    for label in labels:
-        if model_name == "vicuna-7b" or model_name == "Llama-2-7b" or model_name == "mistral-7b" or model_name == "wizardlm-7b":
-            label_id = tokenizer.convert_tokens_to_ids(f"▁{label}")
-        elif model_name == "gpt2-xl" or model_name == "falcon-7b":
-            label_id = tokenizer.convert_tokens_to_ids(f"Ġ{label}")
-        if position == "label":
-            label_pos = [i for i, x in enumerate(input_ids) if x == label_id and input_ids[i - 2] == output_id]
-        elif position == "column":
-            label_pos = [i - 1 for i, x in enumerate(input_ids) if x == label_id and input_ids[i - 2] == output_id]
-        all_label_pos += label_pos
-    q_pos = [len(input_ids) - 1]
-    return sorted(all_label_pos + q_pos)
-
-def perturb_labels(demo_data, flip_idx):
-    new_demo_labels = list(demo_data[1])
-    for i in flip_idx:
-        orig_label = demo_data[1][i]
-        orig_num = map_abcd_to_int[orig_label]
-        new_label = np.random.choice([x for x in range(len(map_abcd_to_int)) if x != orig_num])
-        new_demo_labels[i] = map_int_to_abcd[new_label]
-    new_demo_data = (demo_data[0], new_demo_labels)
-    return new_demo_data
-
-
-def remove_data(demo_data, remove_idx):
-    new_demo_data = (np.delete(demo_data[0], remove_idx), np.delete(demo_data[1], remove_idx))
-    return new_demo_data
-
-
-def compute_infl(demo_data, eval_data, layer_nums, project_dim=None, device="cuda", score="test"):
-    context = get_context(demo_data, eval_data)
-    input_ids = tokenizer.encode(context, return_tensors="pt").to(device)
-    out = model(input_ids, output_hidden_states=True,)
-    hidden_states = out.hidden_states
-    options = list(map_abcd_to_int.keys())
-    label_pos = get_label_pos(tokenizer, input_ids[0], options, model_name=model_name)
-
-    infl_store = np.array([0. for _ in range(len(demo_data[0]))])
-
-    for layer_num in layer_nums:
-        emb = get_embedding(hidden_states, label_pos, layer_num, device=device).to(torch.float32)
-
-        y = torch.tensor([map_abcd_to_int[label] for label in demo_data[1]]).to(device).to(torch.int64)
-        if project_dim is None or project_dim == emb.shape[1]:
-            # use an identity matrix
-            project_matrix = torch.nn.Identity(emb.shape[1]).to(device)
-        else:
-            project_matrix = torch.nn.Linear(emb.shape[1], project_dim, bias=False).to(device)
-        w = get_ridge_weights(emb[:-1], y, len(map_abcd_to_int), project_matrix, device=device).to(torch.float32)
-        cur_infls = []
-        for i in range(len(demo_data[0])):
-            infl = calc_influence(i, emb, w, eval_data[1][0], y, map_abcd_to_int, project_matrix, device=device, alpha=1e-9, score=score)
-            cur_infls.append(infl)
-        cur_infls = np.asarray(cur_infls)
-        infl_store += cur_infls
-    return infl_store
-
-
-def check_answer(model, tokenizer, context, eval_data, device="cuda"):
-    input_ids = tokenizer.encode(context, return_tensors="pt").to(device)
-    output_tokens = model.generate(input_ids, do_sample=False, max_new_tokens=3, pad_token_id=tokenizer.eos_token_id)
-    # check if the answer is corret
-    answer = tokenizer.decode(output_tokens[0][len(input_ids[0]):], skip_special_tokens=True)
-    if answer.strip() == eval_data[1][0].strip():
-        return True
-    else:
-        return False
 
 def check_gpt_answer(gpt_answer, eval_data):
     total_correct = 0
@@ -318,7 +64,7 @@ def update_config(config, base_config=None):
 
 def run():
     seed = 0
-    data_input, data_output = process_raw_data(dataset_name, seed, bs * (icl_dataset_size + 10))
+    data_input, data_output, map_abcd_to_int, map_int_to_abcd = process_raw_data(dataset_name, seed, bs * (icl_dataset_size + 10))
     dataset = get_data(data_input, data_output, map_int_to_abcd, seed=seed, bs=bs, num_data=icl_dataset_size)
 
     all_orig_acc_mean = []
@@ -327,7 +73,7 @@ def run():
     for idx, (demo_data, eval_data) in enumerate(dataset):
 
         perturb_indices = np.random.choice(len(demo_data[0]), num_perturb, replace=False)
-        demo_data = perturb_labels(demo_data, perturb_indices)
+        demo_data = perturb_labels(demo_data, perturb_indices, map_abcd_to_int, map_int_to_abcd)
 
         num_averaging = 4
         from utils import SobolPermutations
@@ -359,15 +105,21 @@ def run():
 
             new_demo_data = cur_demo_data
             dummy_eval_data = (new_demo_data[0][:1], new_demo_data[1][:1])
-            infl = compute_infl(new_demo_data, dummy_eval_data, layer_nums, project_dim, device=device, score="self")
+            infl = compute_infl(
+                model_name,
+                model,
+                tokenizer,
+                map_abcd_to_int,
+                new_demo_data, 
+                dummy_eval_data, 
+                layer_nums, 
+                project_dim, 
+                device=device, 
+                score="self",
+                alpha=1e-9,
+            )
             indices = np.argsort(infl)
             indices = np.concatenate([indices[-2:][::-1], indices[:-2]])
-            
-            # indices_ = np.zeros_like(indices)
-            # # order_ = np.array([0, 9, 8, 7, 1, 6, 5, 4, 3, 2])
-            # order_ = np.asarray([0,1,2,3,4,5,6,7,8,9])
-            # indices_[order_] = indices
-            # indices = indices_
             
             new_demo_data = (np.array(new_demo_data[0])[indices], np.array(new_demo_data[1])[indices])
 

@@ -1,54 +1,26 @@
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 import os
-import json
 import time
-import math
+from src.infl_torch import calc_influence_single
 
-from utils import DemosTemplate, EvalTemplate
-from src.infl_torch import calc_influence, get_ridge_weights, calc_influence_single
+from utils import (
+    load_model,
+    process_raw_data,
+    perturb_labels,
+    remove_data,
+    get_context,
+    get_label_pos,
+    get_embedding,
+    compute_infls,
+)
 
-from datasets import load_dataset
 import inseq
 
 import argparse
 
 from gpt_query import model_from_config
 import yaml
-
-map_int_to_abcd = {
-    0: "A",
-    1: "B",
-    2: "C",
-    3: "D",
-}
-
-map_abcd_to_int = {
-    "A": 0,
-    "B": 1,
-    "C": 2,
-    "D": 3,
-}
-
-
-def load_model(model_path="lmsys/vicuna-7b-v1.3", tokenizer_path=None, tokenizer_only=False, device="cuda"):
-    if tokenizer_path is None:
-        tokenizer_path = model_path
-    model = None
-    if not tokenizer_only:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-        ).to(device).eval()
-    tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path,
-        use_fast=False,
-        padding_side="left",
-    )
-    tokenizer.pad_token = tokenizer.eos_token
-    return model, tokenizer
 
 
 def load_inseq(model_path, method_name):
@@ -111,145 +83,6 @@ def inseq_attr_score(inputs, eval_data, model):
     return np.array(sample_attrs)
 
 
-
-def process_raw_data(dataset_name, seed, total_num_data):
-    global map_abcd_to_int, map_int_to_abcd
-    if dataset_name == "ag_news":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-            2: "C",
-            3: "D",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-            "C": 2,
-            "D": 3,
-        }
-        raw_dataset = load_dataset(dataset_name)
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "rotten_tomatoes":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-        }
-        raw_dataset = load_dataset("rotten_tomatoes")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "sst2":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-        }
-        raw_dataset = load_dataset("SetFit/sst2")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "sst5":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-            2: "C",
-            3: "D",
-            4: "E",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-            "C": 2,
-            "D": 3,
-            "E": 4,
-        }
-        raw_dataset = load_dataset("SetFit/sst5")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "subj":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-        }
-        raw_dataset = load_dataset("SetFit/subj")
-        data = raw_dataset["train"]
-        data = data.shuffle(seed=seed)
-        # total_num_data = bs * (num_data + 1) # +1 for test query
-        assert len(data) >= total_num_data, f"Dataset size is {len(data)}, which is less than {total_num_data}"
-        map_fn = lambda x: map_int_to_abcd[x]
-        data_input = data['text'][:total_num_data]
-        data_output = list(map(map_fn, data['label'][:total_num_data]))
-    elif dataset_name == "sentence_similarity":
-        map_int_to_abcd = {
-            0: "A",
-            1: "B",
-            2: "C",
-            3: "D",
-            4: "E",
-            5: "F",
-        }
-
-        map_abcd_to_int = {
-            "A": 0,
-            "B": 1,
-            "C": 2,
-            "D": 3,
-            "E": 4,
-            "F": 5,
-        }
-        with open("./data/sentence_similarity.json") as f:
-            sentence_similarity = json.load(f)
-        samples = list(sentence_similarity['examples'].values())
-        # shuffle samples
-        np.random.seed(seed)
-        np.random.shuffle(samples)
-        outputs = list(map(lambda x: x['output'], samples))
-        labels = np.unique(outputs)
-        mapped_outputs = list(map(lambda x: map_int_to_abcd[labels.tolist().index(x)], outputs))
-        inputs = list(map(lambda x: x['input'], samples))
-        data_input = inputs[:total_num_data]
-        data_output = mapped_outputs[:total_num_data]
-    else:
-        raise NotImplementedError(f"Dataset {dataset_name} not implemented")
-    
-    return data_input, data_output
-
-
 def get_data(data_input, data_output, bs=200, num_data=10, eval_len=20, test_len=20):
     # first split data_input and data_output into train, val, and test
     assert 6 * num_data <= len(data_input) - bs * num_data, "Not enough data for test"
@@ -279,141 +112,6 @@ def get_demos(demo_data):
     return demos
 
 
-def get_context(demo_data, eval_data):
-    demos_template = "Input: [INPUT]\nOutput: [OUTPUT]"
-    eval_template = "[full_DEMO]\n\nInput: [INPUT]\nOutput:"
-
-    d_template = DemosTemplate(demos_template)
-    e_template = EvalTemplate(eval_template)
-    demos = d_template.fill(demo_data)
-    evals = e_template.fill(full_demo=demos, input=eval_data[0][0])
-
-    return evals
-
-
-def get_embedding(hidden_states, label_pos, layer_num, item_num=0, device="cuda"):
-    return hidden_states[layer_num][item_num][label_pos].to(device)
-
-
-def get_label_pos(tokenizer, input_ids, model_name="vicuna-7b", position="column"):
-    output_id = tokenizer.convert_tokens_to_ids("Output")
-    all_label_pos = []
-    labels = list(map_abcd_to_int.keys())
-    for label in labels:
-        if model_name in ["vicuna-7b", "Llama-2-7b", "Llama-2-13b", "mistral-7b", "wizardlm-7b"]:
-            label_id = tokenizer.convert_tokens_to_ids(f"▁{label}")
-        elif model_name == "gpt2-xl" or model_name == "falcon-7b":
-            label_id = tokenizer.convert_tokens_to_ids(f"Ġ{label}")
-        if position == "label":
-            label_pos = [i for i, x in enumerate(input_ids) if x == label_id and input_ids[i - 2] == output_id]
-        elif position == "column":
-            label_pos = [i - 1 for i, x in enumerate(input_ids) if x == label_id and input_ids[i - 2] == output_id]
-        all_label_pos += label_pos
-    q_pos = [len(input_ids) - 1]
-    return sorted(all_label_pos + q_pos)
-
-
-def compute_infls(demo_data, eval_data, layer_nums, project_dim=None, device="cuda", score="test"):
-    contexts = [get_context(demo_data, (eval_data[0][idx:idx+1], eval_data[1][idx:idx+1])) for idx in range(len(eval_data[0]))]
-    input_ids = tokenizer(contexts, padding=True, return_tensors="pt").to(device)['input_ids']
-    # input_ids = tokenizer.batch_encode_plus(contexts, return_tensors="pt", padding=True).to(device)["input_ids"]
-    out = model(input_ids, output_hidden_states=True,)
-    hidden_states = out.hidden_states
-
-    infl_store = np.array([0. for _ in range(len(demo_data[0]))])
-
-    for layer_num in layer_nums:
-        for idx in range(len(eval_data[0])):
-            label_pos = get_label_pos(tokenizer, input_ids[idx], model_name=model_name)
-            emb = get_embedding(hidden_states, label_pos, layer_num, item_num=idx, device=device).to(torch.float32)
-
-            y = torch.tensor([map_abcd_to_int[label] for label in demo_data[1]]).to(device).to(torch.int64)
-            if project_dim is None or project_dim == emb.shape[1]:
-                # use an identity matrix
-                project_matrix = torch.nn.Identity(emb.shape[1]).to(device)
-            else:
-                project_matrix = torch.nn.Linear(emb.shape[1], project_dim, bias=False).to(device)
-                torch.nn.init.normal_(project_matrix.weight, mean=0.0, std=math.sqrt(1.0/project_dim))
-            w = get_ridge_weights(emb[:-1], y, len(map_abcd_to_int), project_matrix, device=device).to(torch.float32)
-            cur_infls = []
-            for i in range(len(demo_data[0])):
-                infl = calc_influence(i, emb, w, eval_data[1][0], y, map_abcd_to_int, project_matrix, device=device, score=score, alpha=alpha)
-                cur_infls.append(infl)
-            cur_infls = np.asarray(cur_infls)
-            infl_store += cur_infls
-    return infl_store
-
-
-def compute_infl(demo_data, eval_data, layer_nums, project_dim=None, device="cuda", score="test"):
-    context = get_context(demo_data, eval_data)
-    input_ids = tokenizer.encode(context, return_tensors="pt").to(device)
-    out = model(input_ids, output_hidden_states=True,)
-    hidden_states = out.hidden_states
-    label_pos = get_label_pos(tokenizer, input_ids[0], model_name=model_name)
-
-    infl_store = np.array([0. for _ in range(len(demo_data[0]))])
-
-    for layer_num in layer_nums:
-        emb = get_embedding(hidden_states, label_pos, layer_num, device=device).to(torch.float32)
-
-        y = torch.tensor([map_abcd_to_int[label] for label in demo_data[1]]).to(device).to(torch.int64)
-        if project_dim is None or project_dim == emb.shape[1]:
-            # use an identity matrix
-            project_matrix = torch.nn.Identity(emb.shape[1]).to(device)
-        else:
-            project_matrix = torch.nn.Linear(emb.shape[1], project_dim, bias=False).to(device)
-            torch.nn.init.normal_(project_matrix.weight, mean=0.0, std=math.sqrt(1.0/project_dim))
-        w = get_ridge_weights(emb[:-1], y, len(map_abcd_to_int), project_matrix, device=device).to(torch.float32)
-        cur_infls = []
-        for i in range(len(demo_data[0])):
-            infl = calc_influence(i, emb, w, eval_data[1][0], y, map_abcd_to_int, project_matrix, device=device, score=score, alpha=alpha)
-            cur_infls.append(infl)
-        cur_infls = np.asarray(cur_infls)
-        infl_store += cur_infls
-    return infl_store
-
-
-def perturb_labels(demo_data, flip_idx):
-    new_demo_labels = list(demo_data[1])
-    for i in flip_idx:
-        orig_label = demo_data[1][i]
-        orig_num = map_abcd_to_int[orig_label]
-        new_label = np.random.choice([x for x in range(len(map_abcd_to_int)) if x != orig_num])
-        new_demo_labels[i] = map_int_to_abcd[new_label]
-    new_demo_data = (demo_data[0], new_demo_labels)
-    return new_demo_data
-
-
-def remove_data(demo_data, remove_idx):
-    new_demo_data = (np.delete(demo_data[0], remove_idx), np.delete(demo_data[1], remove_idx))
-    return new_demo_data
-
-
-def check_answer(model, tokenizer, context, eval_data, device="cuda"):
-    input_ids = tokenizer.encode(context, return_tensors="pt").to(device)
-    output_tokens = model.generate(input_ids, do_sample=False, max_new_tokens=3, pad_token_id=tokenizer.eos_token_id)
-    # check if the answer is corret
-    answer = tokenizer.decode(output_tokens[0][len(input_ids[0]):], skip_special_tokens=True)
-    if answer.strip() == eval_data[1][0].strip():
-        return True
-    else:
-        return False
-
-
-def check_answers(model, tokenizer, demo_data, eval_data, device="cuda"):
-    contexts = [get_context(demo_data, (eval_data[0][idx:idx+1], eval_data[1][idx:idx+1])) for idx in range(len(eval_data[0]))]
-    input_ids = tokenizer(contexts, padding=True, return_tensors="pt").to(device)
-    output_tokens = model.generate(**input_ids, do_sample=False, max_new_tokens=3, pad_token_id=tokenizer.eos_token_id)
-    answers = []
-    for idx in range(len(eval_data[0])):
-        output_token = output_tokens[idx][len(input_ids['input_ids'][idx]):]
-        answers.append(tokenizer.decode(output_token, skip_special_tokens=True))
-    correct = 0
-    for idx, answer in enumerate(answers):
-        if answer.strip() == eval_data[1][idx].strip():
-            correct += 1
-    return correct
-
 def check_answers_integrated_model(model, demo_data, eval_data):
     contexts = [get_context(demo_data, (eval_data[0][idx:idx+1], eval_data[1][idx:idx+1])) for idx in range(len(eval_data[0]))]
     answers = model.generate_text(contexts, 1, 0, use_seed=True)
@@ -427,7 +125,7 @@ def check_answers_integrated_model(model, demo_data, eval_data):
 
 def remove_and_get_correct_num(demo_data, test_data, remove_idx, model, tokenizer=None, batch_size=4, is_corrupt=False, device="cuda"):
     if is_corrupt:
-        new_demo_data = perturb_labels(demo_data, remove_idx)
+        new_demo_data = perturb_labels(demo_data, remove_idx, map_abcd_to_int, map_int_to_abcd)
     else:
         new_demo_data = remove_data(demo_data, remove_idx)
 
@@ -550,7 +248,7 @@ def compute_vinay_infl(demo_data, eval_data, model, tokenizer):
 
 
 def run(num_remove, gpt_model):
-    global model, tokenizer
+    global model, tokenizer, map_abcd_to_int, map_int_to_abcd
     acc_rem_low = []
     wall_time = []
 
@@ -570,7 +268,7 @@ def run(num_remove, gpt_model):
         raise NotImplementedError(f"Method {method_name} not implemented")
 
     for seed in range(num_trials):
-        data_input, data_output = process_raw_data(dataset_name, seed, bs * (icl_dataset_size) + 1000)
+        data_input, data_output, map_abcd_to_int, map_int_to_abcd = process_raw_data(dataset_name, seed, bs * (icl_dataset_size) + 1000)
 
         eval_len = 20
         test_len = 20
@@ -585,7 +283,7 @@ def run(num_remove, gpt_model):
 
             # randomly perturb 5 labels
             perturb_indices = np.random.choice(len(demo_data[0]), 5, replace=False)
-            demo_data = perturb_labels(demo_data, perturb_indices)
+            demo_data = perturb_labels(demo_data, perturb_indices, map_abcd_to_int, map_int_to_abcd)
 
             num_success_rem_low = 0
 
@@ -599,7 +297,19 @@ def run(num_remove, gpt_model):
                 for idx in range(eval_len):
                     cur_eval_data = (eval_data[0][idx:idx+1], eval_data[1][idx:idx+1])
                     context = get_context(demo_data, cur_eval_data)
-                    infls += compute_infls(demo_data, cur_eval_data, layer_nums, project_dim=project_dim, device=device, score="test")
+                    infls += compute_infls(
+                        model_name,
+                        model,
+                        tokenizer,
+                        map_abcd_to_int,
+                        demo_data, 
+                        cur_eval_data, 
+                        layer_nums, 
+                        project_dim=project_dim, 
+                        device=device, 
+                        score="test",
+                        alpha=alpha,
+                    )
                 end = time.time()
                 # remove the top {num_remove} data points with the lowest influence
                 remove_idx = np.argsort(infls)[:num_remove]

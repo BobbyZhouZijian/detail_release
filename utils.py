@@ -216,6 +216,7 @@ def SobolPermutations(num_samples, dimension, seed=3244, verbose=True):
 
 def load_model(model_path="lmsys/vicuna-7b-v1.3", tokenizer_path=None, device="cuda"):
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    import torch
     if tokenizer_path is None:
         tokenizer_path = model_path
     model = AutoModelForCausalLM.from_pretrained(
@@ -387,6 +388,7 @@ def compute_infl(
         alpha=1.0,
     ):
     from src.infl_torch import calc_influence, get_ridge_weights
+    import torch
     assert len(eval_data[0]) == 1, "Only one eval data point is allowed"
     context = get_context(demo_data, eval_data)
     input_ids = tokenizer.encode(context, return_tensors="pt").to(device)
@@ -430,6 +432,7 @@ def compute_infls(
         alpha=1.0,
     ):
     from src.infl_torch import calc_influence, get_ridge_weights
+    import torch
     contexts = [get_context(demo_data, (eval_data[0][idx:idx+1], eval_data[1][idx:idx+1])) for idx in range(len(eval_data[0]))]
     input_ids = tokenizer(contexts, padding=True, return_tensors="pt").to(device)['input_ids']
     # input_ids = tokenizer.batch_encode_plus(contexts, return_tensors="pt", padding=True).to(device)["input_ids"]

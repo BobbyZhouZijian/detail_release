@@ -71,7 +71,19 @@ def run():
             new_demo_data = cur_demo_data
 
 
-            infl = compute_infl(new_demo_data, eval_data, layer_nums, project_dim, device=device, score="self")
+            infl = compute_infl(
+                model_name,
+                model,
+                tokenizer,
+                map_abcd_to_int,
+                new_demo_data, 
+                eval_data, 
+                layer_nums, 
+                project_dim, 
+                device=device, 
+                score="self",
+                alpha=1e-9,
+            )
             indices = np.argsort(infl)
             if dataset_name == "sst2":
                 indices = indices[::-1]
