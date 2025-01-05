@@ -1,6 +1,6 @@
 # Generalizing Influence to Demontration Attribution in In-context Learning
 
-## [Paper link](https://arxiv.org/abs/2405.14899)
+## [Paper link](https://arxiv.org/abs/2405.14899) (Our paper is accepted to NeurIPS 2024!)
 
 **Abstract**:
 In-context learning (ICL) allows transformer-based language models that are pre-trained on general text to quickly learn a specific task with a few "task demonstrations" without updating their parameters, significantly boosting their flexibility and generality. ICL possesses many distinct characteristics from conventional machine learning, thereby requiring new approaches to interpret this learning paradigm. Taking the viewpoint of recent works showing that transformers learn in context by formulating an internal optimizer, we propose an influence function-based attribution technique, DETAIL, that addresses the specific characteristics of ICL. We empirically verify the effectiveness of our approach for demonstration attribution while being computationally efficient. Leveraging the results, we then show how DETAIL can help improve model performance in real-world scenarios through demonstration reordering and curation. Finally, we experimentally prove the wide applicability of DETAIL by showing our attribution scores obtained on white-box models are transferable to black-box models in improving model performance.
@@ -20,12 +20,10 @@ Parts of the code are referenced from the following repositories
 ## Credit our work
 If you find our work interesting, please star our repository. If you wish to cite our paper, you may use the following citation format
 ```
-@misc{zhou2024detail,
+@inproceedings{zhou2024detail,
       title={DETAIL: Task DEmonsTration Attribution for Interpretable In-context Learning}, 
       author={Zijian Zhou and Xiaoqiang Lin and Xinyi Xu and Alok Prakash and Daniela Rus and Bryan Kian Hsiang Low},
       year={2024},
-      eprint={2405.14899},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
+      booktitle={Advances in Neural Information Processing Systems}
 }
 ```
